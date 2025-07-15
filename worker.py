@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 from env import Env
@@ -53,7 +54,7 @@ class Worker:
             reward = self.env.step(next_location)
 
             self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
-            if self.robot.utility.sum() == 0:
+            if self.robot.utility.sum() == 0 or self.env.explored_rate > 0.9999:
                 done = True
                 reward += 20
             self.save_reward_done(reward, done)
@@ -75,6 +76,9 @@ class Worker:
         self.perf_metrics['travel_dist'] = self.env.travel_dist
         self.perf_metrics['explored_rate'] = self.env.explored_rate
         self.perf_metrics['success_rate'] = done
+        self.perf_metrics['sr_room'] = done if 'room' in self.env.map_path else np.nan
+        self.perf_metrics['sr_tunnel'] = done if 'tunnel' in self.env.map_path else np.nan
+        self.perf_metrics['sr_outdoor'] = done if 'outdoor' in self.env.map_path else np.nan
 
         # save gif
         if self.save_image:

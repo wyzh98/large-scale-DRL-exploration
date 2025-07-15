@@ -1,11 +1,13 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 import ray
 import os
 import numpy as np
 import random
+import wandb
 
 from model import PolicyNet, QNet
 from runner import RLRunner
@@ -56,7 +58,6 @@ def main():
         global_q_net1.load_state_dict(checkpoint['q_net1_model'])
         global_q_net2.load_state_dict(checkpoint['q_net2_model'])
         log_alpha = checkpoint['log_alpha']
-        log_alpha = checkpoint['log_alpha']
         log_alpha_optimizer = optim.Adam([log_alpha], lr=1e-4)
 
         global_policy_optimizer.load_state_dict(checkpoint['policy_optimizer'])
@@ -73,6 +74,12 @@ def main():
     global_target_q_net2.load_state_dict(global_q_net2.state_dict())
     global_target_q_net1.eval()
     global_target_q_net2.eval()
+
+    if USE_WANDB:
+        import parameter
+        vars(parameter).__delitem__('__builtins__')
+        wandb.init(project='InpaintExplorationPlanner', name=FOLDER_NAME, entity='ezo', config=vars(parameter), resume='allow',
+                   id=None, notes=None)
 
     # launch meta agents
     meta_agents = [RLRunner.remote(i) for i in range(NUM_META_AGENT)]
@@ -93,6 +100,9 @@ def main():
     dp_target_q_net1 = nn.DataParallel(global_target_q_net1)
     dp_target_q_net2 = nn.DataParallel(global_target_q_net2)
 
+    # mixed precision training
+    scaler = GradScaler()
+
     # launch the first job on each runner
     job_list = []
     for i, meta_agent in enumerate(meta_agents):
@@ -100,7 +110,7 @@ def main():
         job_list.append(meta_agent.job.remote(weights_set, curr_episode))
 
     # initialize metric collector
-    metric_name = ['travel_dist', 'success_rate', 'explored_rate']
+    metric_name = ['travel_dist', 'success_rate', 'explored_rate', 'sr_room', 'sr_tunnel', 'sr_outdoor']
     training_data = []
     perf_metrics = {}
     for n in metric_name:
@@ -198,59 +208,71 @@ def main():
 
                     # SAC
                     with torch.no_grad():
-                        q_values1 = dp_q_net1(*critic_observation)
-                        q_values2 = dp_q_net2(*critic_observation)
-                        q_values = torch.min(q_values1, q_values2)
+                        with autocast():
+                            q_values1 = dp_q_net1(*critic_observation)
+                            q_values2 = dp_q_net2(*critic_observation)
+                            q_values = torch.min(q_values1, q_values2)
 
-                    logp = dp_policy(*observation)
-                    policy_loss = torch.sum(
-                        (logp.exp().unsqueeze(2) * (log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach())),
-                        dim=1).mean()
+                    with autocast():
+                        logp = dp_policy(*observation)
+                        policy_loss = torch.sum(
+                            (logp.exp().unsqueeze(2) * (log_alpha.exp().detach() * logp.unsqueeze(2) - q_values.detach())),
+                            dim=1).mean()
 
                     global_policy_optimizer.zero_grad()
-                    policy_loss.backward()
+                    scaler.scale(policy_loss).backward()
+                    scaler.unscale_(global_policy_optimizer)
                     policy_grad_norm = torch.nn.utils.clip_grad_norm_(global_policy_net.parameters(), max_norm=100,
                                                                       norm_type=2)
-                    global_policy_optimizer.step()
+                    scaler.step(global_policy_optimizer)
+                    scaler.update()
 
                     with torch.no_grad():
-                        next_logp = dp_policy(*next_observation)
-                        next_q_values1 = dp_target_q_net1(*critic_next_observation)
-                        next_q_values2 = dp_target_q_net2(*critic_next_observation)
-                        next_q_values = torch.min(next_q_values1, next_q_values2)
-                        value_prime = torch.sum(
-                            next_logp.unsqueeze(2).exp() * (next_q_values - log_alpha.exp() * next_logp.unsqueeze(2)),
-                            dim=1).unsqueeze(1)
-                        target_q = reward + GAMMA * (1 - done) * value_prime
+                        with autocast():
+                            next_logp = dp_policy(*next_observation)
+                            next_q_values1 = dp_target_q_net1(*critic_next_observation)
+                            next_q_values2 = dp_target_q_net2(*critic_next_observation)
+                            next_q_values = torch.min(next_q_values1, next_q_values2)
+                            value_prime = torch.sum(
+                                next_logp.unsqueeze(2).exp() * (next_q_values - log_alpha.exp() * next_logp.unsqueeze(2)),
+                                dim=1).unsqueeze(1)
+                            target_q = reward + GAMMA * (1 - done) * value_prime
 
                     mse_loss = nn.MSELoss()
 
-                    q_values1 = dp_q_net1(*critic_observation)
-                    q1 = torch.gather(q_values1, 1, action)
-                    q1_loss = mse_loss(q1, target_q.detach()).mean()
+                    with autocast():
+                        q_values1 = dp_q_net1(*critic_observation)
+                        q1 = torch.gather(q_values1, 1, action)
+                        q1_loss = mse_loss(q1, target_q.detach()).mean()
 
                     global_q_net1_optimizer.zero_grad()
-                    q1_loss.backward()
+                    scaler.scale(q1_loss).backward()
                     q_grad_norm = torch.nn.utils.clip_grad_norm_(global_q_net1.parameters(), max_norm=20000,
                                                                  norm_type=2)
-                    global_q_net1_optimizer.step()
+                    scaler.step(global_q_net1_optimizer)
+                    scaler.update()
 
-                    q_values2 = dp_q_net2(*critic_observation)
-                    q2 = torch.gather(q_values2, 1, action)
-                    q2_loss = mse_loss(q2, target_q.detach()).mean()
+                    with autocast():
+                        q_values2 = dp_q_net2(*critic_observation)
+                        q2 = torch.gather(q_values2, 1, action)
+                        q2_loss = mse_loss(q2, target_q.detach()).mean()
 
                     global_q_net2_optimizer.zero_grad()
-                    q2_loss.backward()
+                    scaler.scale(q2_loss).backward()
+                    scaler.unscale_(global_q_net2_optimizer)
                     q_grad_norm = torch.nn.utils.clip_grad_norm_(global_q_net2.parameters(), max_norm=20000,
                                                                  norm_type=2)
-                    global_q_net2_optimizer.step()
+                    scaler.step(global_q_net2_optimizer)
+                    scaler.update()
 
-                    entropy = (logp * logp.exp()).sum(dim=-1)
-                    alpha_loss = -(log_alpha * (entropy.detach() + entropy_target)).mean()
+                    with autocast():
+                        entropy = (logp * logp.exp()).sum(dim=-1)
+                        alpha_loss = -(log_alpha * (entropy.detach() + entropy_target)).mean()
 
                     log_alpha_optimizer.zero_grad()
-                    alpha_loss.backward()
-                    log_alpha_optimizer.step()
+                    scaler.scale(alpha_loss).backward()
+                    scaler.step(log_alpha_optimizer)
+                    scaler.update()
 
                     target_q_update_counter += 1
                     # print("target q update counter", target_q_update_counter % 1024)
@@ -303,7 +325,7 @@ def main():
                               "log_alpha_optimizer": log_alpha_optimizer.state_dict(),
                               "episode": curr_episode,
                               }
-                path_checkpoint = "./" + model_path + "/checkpoint.pth"
+                path_checkpoint = model_path + "/checkpoint.pth"
                 torch.save(checkpoint, path_checkpoint)
                 print('Saved model', end='\n')
 
@@ -311,6 +333,8 @@ def main():
         print("CTRL_C pressed. Killing remote workers")
         for a in meta_agents:
             ray.kill(a)
+        if USE_WANDB:
+            wandb.finish(quiet=True)
 
 
 def write_to_tensor_board(writer, tensorboard_data, curr_episode):
@@ -319,20 +343,30 @@ def write_to_tensor_board(writer, tensorboard_data, curr_episode):
 
     tensorboard_data = np.array(tensorboard_data)
     tensorboard_data = list(np.nanmean(tensorboard_data, axis=0))
-    reward, value, policy_loss, q_value_loss, entropy, policy_grad_norm, q_value_grad_norm, log_alpha, alpha_loss, travel_dist, success_rate, explored_rate = tensorboard_data
+    (reward, value, policy_loss, q_value_loss, entropy, policy_grad_norm, q_value_grad_norm, log_alpha, alpha_loss,
+     travel_dist, success_rate, explored_rate, sr_room, sr_tunnel, sr_outdoor) = tensorboard_data
 
-    writer.add_scalar(tag='Losses/Value', scalar_value=value, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Policy Loss', scalar_value=policy_loss, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Alpha Loss', scalar_value=alpha_loss, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Q Value Loss', scalar_value=q_value_loss, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Entropy', scalar_value=entropy, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Policy Grad Norm', scalar_value=policy_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Q Value Grad Norm', scalar_value=q_value_grad_norm, global_step=curr_episode)
-    writer.add_scalar(tag='Losses/Log Alpha', scalar_value=log_alpha, global_step=curr_episode)
-    writer.add_scalar(tag='Perf/Reward', scalar_value=reward, global_step=curr_episode)
-    writer.add_scalar(tag='Perf/Travel Distance', scalar_value=travel_dist, global_step=curr_episode)
-    writer.add_scalar(tag='Perf/Explored Rate', scalar_value=explored_rate, global_step=curr_episode)
-    writer.add_scalar(tag='Perf/Success Rate', scalar_value=success_rate, global_step=curr_episode)
+    metrics = {
+        "Losses/Value": value,
+        "Losses/Policy Loss": policy_loss,
+        "Losses/Alpha Loss": alpha_loss,
+        "Losses/Q Value Loss": q_value_loss,
+        "Losses/Entropy": entropy,
+        "Losses/Policy Grad Norm": policy_grad_norm,
+        "Losses/Q Value Grad Norm": q_value_grad_norm,
+        "Losses/Log Alpha": log_alpha,
+        "Perf/Reward": reward,
+        "Perf/Travel Distance": travel_dist,
+        "Perf/Explored Rate": explored_rate,
+        "Perf/Success Rate": success_rate,
+        "Perf/Success Rate Room": sr_room,
+        "Perf/Success Rate Tunnel": sr_tunnel,
+        "Perf/Success Rate Outdoor": sr_outdoor,
+    }
+    for k, v in metrics.items():
+        writer.add_scalar(k, v, curr_episode)
+    if USE_WANDB:
+        wandb.log(metrics, step=curr_episode)
 
 
 if __name__ == "__main__":

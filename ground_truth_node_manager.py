@@ -31,8 +31,6 @@ class GroundTruthNodeManager:
         all_node_coords = np.array(all_node_coords).reshape(-1, 2)
         utility = []
         explored_sign = []
-        guidepost = []
-
         n_nodes = all_node_coords.shape[0]
         adjacent_matrix = np.ones((n_nodes, n_nodes)).astype(int)
         node_coords_to_check = all_node_coords[:, 0] + all_node_coords[:, 1] * 1j
@@ -40,7 +38,6 @@ class GroundTruthNodeManager:
             node = self.nodes_dict.find((coords[0], coords[1])).data
             utility.append(node.utility)
             explored_sign.append(node.explored)
-            guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)
                 index = index[0][0]
@@ -48,10 +45,28 @@ class GroundTruthNodeManager:
 
         utility = np.array(utility)
         explored_sign = np.array(explored_sign)
-        guidepost = np.array(guidepost)
+
+        indices = np.argwhere(utility > 0).reshape(-1)
+        utility_node_coords = all_node_coords[indices]
+        dist_dict, prev_dict = Dijkstra(self.nodes_dict, robot_location)
+        guidepost = np.zeros_like(utility)
+        nearest_utility_coords = robot_location
+        nearest_dist = 1e8
+        for end in utility_node_coords:
+            if end[0] != robot_location[0] or end[1] != robot_location[1]:
+                dist = dist_dict[(end[0], end[1])]
+                if dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_utility_coords = end
+        path_coords, _ = get_Dijkstra_path_and_dist(dist_dict, prev_dict, nearest_utility_coords)
+        for coords in path_coords:
+            coords_index = np.argwhere(node_coords_to_check == coords[0] + coords[1] * 1j)
+            if coords_index:
+                index = coords_index[0]
+                guidepost[index] = 1
 
         current_index = np.argwhere(node_coords_to_check == robot_location[0] + robot_location[1] * 1j)[0][0]
-        
+
         # neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
         neighbor_indices = []
         current_node_in_belief = self.node_manager.nodes_dict.find(robot_location.tolist()).data
@@ -76,8 +91,8 @@ class GroundTruthNodeManager:
         current_node_coords = node_coords[current_index]
         node_coords = np.concatenate((node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
                                       node_coords[:, 1].reshape(-1, 1) - current_node_coords[1]),
-                                      axis=-1) / UPDATING_MAP_SIZE / 2
-        #node_coords = node_coords / UPDATING_MAP_SIZE / 3
+                                     axis=-1) / UPDATING_MAP_SIZE / 2
+        # node_coords = node_coords / UPDATING_MAP_SIZE / 3
         node_utility = node_utility / (SENSOR_RANGE * 3.14 // FRONTIER_CELL_SIZE)
         node_inputs = np.concatenate((node_coords, node_utility, node_guidepost, node_guidepost2), axis=1)
         node_inputs = torch.FloatTensor(node_inputs).unsqueeze(0).to(self.device)
@@ -126,7 +141,7 @@ class GroundTruthNodeManager:
 
         for node in self.nodes_dict.__iter__():
             node.data.get_neighbor_nodes(self.ground_truth_map_info, self.nodes_dict)
-        
+
     def update_graph(self):
         for node in self.node_manager.nodes_dict.__iter__():
             coords = node.data.coords
@@ -201,7 +216,7 @@ class Node:
                         continue
 
                     neighbor_coords = np.around(np.array([self.coords[0] + (i - center_index) * NODE_RESOLUTION,
-                                                self.coords[1] + (j - center_index) * NODE_RESOLUTION]), 1)
+                                                          self.coords[1] + (j - center_index) * NODE_RESOLUTION]), 1)
                     neighbor_node = nodes_dict.find((neighbor_coords[0], neighbor_coords[1]))
                     if neighbor_node is None:
                         continue

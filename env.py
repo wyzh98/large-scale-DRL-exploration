@@ -1,4 +1,5 @@
 import os
+import random
 import matplotlib.pyplot as plt
 from skimage import io
 from skimage.measure import block_reduce
@@ -12,14 +13,14 @@ class Env:
     def __init__(self, episode_index, plot=False):
         self.episode_index = episode_index
         self.plot = plot
-        self.ground_truth, self.robot_cell = self.import_ground_truth(episode_index)
+        self.ground_truth, self.robot_cell, self.map_path = self.import_ground_truth(episode_index)
         self.ground_truth_size = np.shape(self.ground_truth)  # cell
         self.cell_size = CELL_SIZE  # meter
 
         self.robot_location = np.array([0.0, 0.0])  # meter
 
         self.robot_belief = np.ones(self.ground_truth_size) * 127
-        self.belief_origin_x = -np.round(self.robot_cell[0] * self.cell_size, 1)   # meter
+        self.belief_origin_x = -np.round(self.robot_cell[0] * self.cell_size, 1)  # meter
         self.belief_origin_y = -np.round(self.robot_cell[1] * self.cell_size, 1)  # meter
 
         self.global_frontiers = set()
@@ -42,12 +43,16 @@ class Env:
             self.trajectory_y = [self.robot_location[1]]
 
     def import_ground_truth(self, episode_index):
-        map_dir = f'maps'
-        map_list = os.listdir(map_dir)
-        map_index = episode_index % np.size(map_list)
-        ground_truth = (io.imread(map_dir + '/' + map_list[map_index], 1) * 255).astype(int)
+        map_dir = f'maps_train'
+        map_list = []
+        for root, _, files in os.walk(map_dir):
+            for file in files:
+                map_list.append(os.path.join(root, file))
+        rng = random.Random(1)
+        rng.shuffle(map_list)
 
-        ground_truth = block_reduce(ground_truth, 2, np.min)
+        map_index = episode_index % np.size(map_list)
+        ground_truth = (io.imread(map_list[map_index], 1)).astype(int)
 
         robot_cell = np.nonzero(ground_truth == 208)
         robot_cell = np.array([np.array(robot_cell)[1, 10], np.array(robot_cell)[0, 10]])
@@ -55,7 +60,7 @@ class Env:
         ground_truth = (ground_truth > 150) | ((ground_truth <= 80) & (ground_truth >= 50))
         ground_truth = ground_truth * 254 + 1
 
-        return ground_truth, robot_cell
+        return ground_truth, robot_cell, map_list[map_index]
 
     def update_robot_location(self, robot_location):
         self.robot_location = robot_location
@@ -72,7 +77,7 @@ class Env:
     def calculate_reward(self, dist):
         reward = 0
         reward -= dist / UPDATING_MAP_SIZE * 5
-        
+
         global_frontiers = get_frontier_in_map(self.belief_info)
         if len(global_frontiers) == 0:
             delta_num = len(self.global_frontiers)
