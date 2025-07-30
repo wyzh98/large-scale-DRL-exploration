@@ -31,8 +31,6 @@ class GroundTruthNodeManager:
         all_node_coords = np.array(all_node_coords).reshape(-1, 2)
         utility = []
         explored_sign = []
-        guidepost = []
-
         n_nodes = all_node_coords.shape[0]
         adjacent_matrix = np.ones((n_nodes, n_nodes)).astype(int)
         node_coords_to_check = all_node_coords[:, 0] + all_node_coords[:, 1] * 1j
@@ -40,7 +38,6 @@ class GroundTruthNodeManager:
             node = self.nodes_dict.find((coords[0], coords[1])).data
             utility.append(node.utility)
             explored_sign.append(node.explored)
-            guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)
                 index = index[0][0]
@@ -48,7 +45,25 @@ class GroundTruthNodeManager:
 
         utility = np.array(utility)
         explored_sign = np.array(explored_sign)
-        guidepost = np.array(guidepost)
+
+        indices = np.argwhere(utility > 0).reshape(-1)
+        utility_node_coords = all_node_coords[indices]
+        dist_dict, prev_dict = Dijkstra(self.nodes_dict, robot_location)
+        guidepost = np.zeros_like(utility)
+        nearest_utility_coords = robot_location
+        nearest_dist = 1e8
+        for end in utility_node_coords:
+            if end[0] != robot_location[0] or end[1] != robot_location[1]:
+                dist = dist_dict[(end[0], end[1])]
+                if dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_utility_coords = end
+        path_coords, _ = get_Dijkstra_path_and_dist(dist_dict, prev_dict, nearest_utility_coords)
+        for coords in path_coords:
+            coords_index = np.argwhere(node_coords_to_check == coords[0] + coords[1] * 1j)
+            if coords_index:
+                index = coords_index[0]
+                guidepost[index] = 1
 
         current_index = np.argwhere(node_coords_to_check == robot_location[0] + robot_location[1] * 1j)[0][0]
         

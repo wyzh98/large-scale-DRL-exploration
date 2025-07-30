@@ -123,7 +123,6 @@ class Agent:
             all_node_coords.append(node.data.coords)
         all_node_coords = np.array(all_node_coords).reshape(-1, 2)
         utility = []
-        guidepost = []
 
         n_nodes = all_node_coords.shape[0]
         adjacent_matrix = np.ones((n_nodes, n_nodes)).astype(int)
@@ -131,15 +130,31 @@ class Agent:
         for i, coords in enumerate(all_node_coords):
             node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
             utility.append(node.utility)
-            guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)
                 assert index is not None
                 index = index[0][0]
                 adjacent_matrix[i, index] = 0
-
         utility = np.array(utility)
-        guidepost = np.array(guidepost)
+
+        indices = np.argwhere(utility > 0).reshape(-1)
+        utility_node_coords = all_node_coords[indices]
+        dist_dict, prev_dict = Dijkstra(self.node_manager.nodes_dict, self.location)
+        guidepost = np.zeros_like(utility)
+        nearest_utility_coords = self.location
+        nearest_dist = 1e8
+        for end in utility_node_coords:
+            if end[0] != self.location[0] or end[1] != self.location[1]:
+                dist = dist_dict[(end[0], end[1])]
+                if dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_utility_coords = end
+        path_coords, _ = get_Dijkstra_path_and_dist(dist_dict, prev_dict, nearest_utility_coords)
+        for coords in path_coords:
+            coords_index = np.argwhere(node_coords_to_check == coords[0] + coords[1] * 1j)
+            if coords_index:
+                index = coords_index[0]
+                guidepost[index] = 1
 
         current_index = np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
@@ -220,6 +235,10 @@ class Agent:
         for node, utility in zip(nodes, self.utility):
             plt.text(node[0], node[1], str(utility), zorder=3)
         plt.plot(robot[0], robot[1], 'mo', markersize=16, zorder=5)
+        guidepost_mask = np.array(self.guidepost, dtype=bool)
+        if guidepost_mask.any():
+            guidepost_nodes = nodes[guidepost_mask]
+            plt.scatter(guidepost_nodes[:, 0], guidepost_nodes[:, 1], c='c', marker='+', zorder=4)
         for coords in self.node_coords:
             node = self.node_manager.nodes_dict.find(coords.tolist()).data
             for neighbor_coords in node.neighbor_set:

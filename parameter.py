@@ -1,5 +1,5 @@
 # saving path
-FOLDER_NAME = 'ariadne1_ground_truth_critic'
+FOLDER_NAME = 'ariadne1_guidenear'
 model_path = f'model/{FOLDER_NAME}'
 train_path = f'train/{FOLDER_NAME}'
 gifs_path = f'gifs/{FOLDER_NAME}'
@@ -31,7 +31,7 @@ UPDATING_MAP_SIZE = 4 * SENSOR_RANGE + 4 * NODE_RESOLUTION  # nodes outside this
 MAX_EPISODE_STEP = 128
 REPLAY_SIZE = 10000
 MINIMUM_BUFFER_SIZE = 2000
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 LR = 1e-5
 GAMMA = 1
 NUM_META_AGENT = 16  # how many threads does your CPU have
@@ -49,3 +49,4 @@ USE_GPU = False  # do you want to collect training data using GPUs (better not)
 USE_GPU_GLOBAL = True  # do you want to train the network using GPUs
 NUM_GPU = 0  # 0 unless you want to collect data using GPUs
 
+USE_WANDB = True

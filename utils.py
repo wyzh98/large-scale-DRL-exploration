@@ -112,7 +112,7 @@ def get_frontier_in_map(map_info):
     x_len = map_info.map.shape[1]
     y_len = map_info.map.shape[0]
     unknown = (map_info.map == UNKNOWN) * 1
-    unknown = np.lib.pad(unknown, ((1, 1), (1, 1)), 'constant', constant_values=0)
+    unknown = np.pad(unknown, ((1, 1), (1, 1)), 'constant', constant_values=0)
     unknown_neighbor = unknown[2:][:, 1:x_len + 1] + unknown[:y_len][:, 1:x_len + 1] + unknown[1:y_len + 1][:, 2:] \
                        + unknown[1:y_len + 1][:, :x_len] + unknown[:y_len][:, 2:] + unknown[2:][:, :x_len] + \
                        unknown[2:][:, 2:] + unknown[:y_len][:, :x_len]
@@ -200,6 +200,85 @@ def check_collision(start, end, map_info):
             y += y_inc
             error += dx
     return collision
+
+
+def Dijkstra(nodes_dict, start):
+    q = set()
+    dist_dict = {}
+    prev_dict = {}
+
+    for node in nodes_dict.__iter__():
+        coords = node.data.coords
+        key = (coords[0], coords[1])
+        dist_dict[key] = 1e8
+        prev_dict[key] = None
+        q.add(key)
+
+    assert (start[0], start[1]) in dist_dict.keys()
+    dist_dict[(start[0], start[1])] = 0
+
+    while len(q) > 0:
+        u = None
+        for coords in q:
+            if u is None:
+                u = coords
+            elif dist_dict[coords] < dist_dict[u]:
+                u = coords
+
+        q.remove(u)
+
+        # assert self.nodes_dict.find(u) is not None
+
+        node = nodes_dict.find(u).data
+        for neighbor_node_coords in node.neighbor_set:
+            v = (neighbor_node_coords[0], neighbor_node_coords[1])
+            if v in q:
+                cost = ((neighbor_node_coords[0] - u[0]) ** 2 + (
+                        neighbor_node_coords[1] - u[1]) ** 2) ** (1 / 2)
+                cost = np.round(cost, 2)
+                alt = dist_dict[u] + cost
+                if alt < dist_dict[v]:
+                    dist_dict[v] = alt
+                    prev_dict[v] = u
+
+    return dist_dict, prev_dict
+
+
+def get_Dijkstra_path_and_dist(dist_dict, prev_dict, end):
+    if (end[0], end[1]) not in dist_dict:
+        print("destination is not in Dijkstra graph")
+        return [], 1e8
+
+    dist = dist_dict[(end[0], end[1])]
+
+    path = [(end[0], end[1])]
+    prev_node = prev_dict[(end[0], end[1])]
+    while prev_node is not None:
+        path.append(prev_node)
+        temp = prev_node
+        prev_node = prev_dict[temp]
+
+    path.reverse()
+    return path[1:], np.round(dist, 2)
+
+
+def compute_shortest_path(nodes_dict, robot_location):
+    dist, prev = Dijkstra(nodes_dict, robot_location)
+    best_dist = float('inf')
+    best_node = None
+    for node in nodes_dict.__iter__():
+        node_data = node.data
+        if node_data.utility > 0:
+            key = (node_data.coords[0], node_data.coords[1])
+            if key == (robot_location[0], robot_location[1]):
+                continue
+            if key in dist and dist[key] < best_dist:
+                best_dist = dist[key]
+                best_node = key
+    if best_node is None:
+        return []
+    path, _ = get_Dijkstra_path_and_dist(dist, prev, best_node)
+    return path
 
 
 def make_gif(path, n, frame_files, rate):
