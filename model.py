@@ -6,186 +6,141 @@ import math
 # a pointer network layer for policy output
 class SingleHeadAttention(nn.Module):
     def __init__(self, embedding_dim):
-        super(SingleHeadAttention, self).__init__()
-        self.input_dim = embedding_dim
+        super().__init__()
         self.embedding_dim = embedding_dim
-        self.value_dim = embedding_dim
-        self.key_dim = self.value_dim
-        self.tanh_clipping = 10
-        self.norm_factor = 1 / math.sqrt(self.key_dim)
+        self.key_dim = embedding_dim
+        self.norm_factor = self.key_dim ** -0.5
+        self.tanh_clipping = 10.0
 
-        self.w_query = nn.Parameter(torch.Tensor(self.input_dim, self.key_dim))
-        self.w_key = nn.Parameter(torch.Tensor(self.input_dim, self.key_dim))
-
-        self.init_parameters()
-
-    def init_parameters(self):
-        for param in self.parameters():
-            stdv = 1. / math.sqrt(param.size(-1))
-            param.data.uniform_(-stdv, stdv)
+        self.W_q = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.W_k = nn.Linear(embedding_dim, embedding_dim, bias=False)
 
     def forward(self, q, k, mask=None):
+        B, T_q, _ = q.size()
+        T_k = k.size(1)
 
-        n_batch, n_key, n_dim = k.size()
-        n_query = q.size(1)
+        Q = self.W_q(q)
+        K = self.W_k(k)
 
-        k_flat = k.reshape(-1, n_dim)
-        q_flat = q.reshape(-1, n_dim)
-
-        shape_k = (n_batch, n_key, -1)
-        shape_q = (n_batch, n_query, -1)
-
-        Q = torch.matmul(q_flat, self.w_query).view(shape_q)
-        K = torch.matmul(k_flat, self.w_key).view(shape_k)
-
-        U = self.norm_factor * torch.matmul(Q, K.transpose(1, 2))
-        U = self.tanh_clipping * torch.tanh(U)
+        scores = torch.bmm(Q, K.transpose(1, 2)) * self.norm_factor
+        scores = self.tanh_clipping * scores.tanh()
 
         if mask is not None:
-            U = U.masked_fill(mask == 1, -6e4)
-        attention = torch.log_softmax(U, dim=-1)  # n_batch*n_query*n_key
+            scores = scores.masked_fill(mask == 1, -6e4)
 
-        return attention
+        attn = torch.log_softmax(scores, dim=-1)  # B, T_q, T_k
+
+        return attn
 
 
 # standard multi head attention layer
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embedding_dim, n_heads=8):
-        super(MultiHeadAttention, self).__init__()
-        self.n_heads = n_heads
-        self.input_dim = embedding_dim
+    def __init__(self, embedding_dim, n_heads=8, bias=False):
+        super().__init__()
         self.embedding_dim = embedding_dim
-        self.value_dim = self.embedding_dim // self.n_heads
-        self.key_dim = self.value_dim
-        self.norm_factor = 1 / math.sqrt(self.key_dim)
+        self.n_heads = n_heads
+        self.head_dim = embedding_dim // n_heads
+        self.norm_factor = self.head_dim ** -0.5
 
-        self.w_query = nn.Parameter(torch.Tensor(self.n_heads, self.input_dim, self.key_dim))
-        self.w_key = nn.Parameter(torch.Tensor(self.n_heads, self.input_dim, self.key_dim))
-        self.w_value = nn.Parameter(torch.Tensor(self.n_heads, self.input_dim, self.value_dim))
-        self.w_out = nn.Parameter(torch.Tensor(self.n_heads, self.value_dim, self.embedding_dim))
-
-        self.init_parameters()
-
-    def init_parameters(self):
-        for param in self.parameters():
-            stdv = 1. / math.sqrt(param.size(-1))
-            param.data.uniform_(-stdv, stdv)
+        self.W_q = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+        self.W_k = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+        self.W_v = nn.Linear(embedding_dim, embedding_dim, bias=bias)
+        self.W_o = nn.Linear(embedding_dim, embedding_dim, bias=bias)
 
     def forward(self, q, k=None, v=None, key_padding_mask=None, attn_mask=None):
-        if k is None:
-            k = q
-        if v is None:
-            v = q
+        k = q if k is None else k
+        v = q if v is None else v
 
-        n_batch, n_key, n_dim = k.size()
-        n_query = q.size(1)
-        n_value = v.size(1)
+        B, T_q, _ = q.size()
+        T_k = k.size(1)
 
-        k_flat = k.contiguous().view(-1, n_dim)
-        v_flat = v.contiguous().view(-1, n_dim)
-        q_flat = q.contiguous().view(-1, n_dim)
-        shape_v = (self.n_heads, n_batch, n_value, -1)
-        shape_k = (self.n_heads, n_batch, n_key, -1)
-        shape_q = (self.n_heads, n_batch, n_query, -1)
+        Q = self.W_q(q).view(B, T_q, self.n_heads, self.head_dim).transpose(1, 2)  # B, n_heads, T, head_dim
+        K = self.W_k(k).view(B, T_k, self.n_heads, self.head_dim).transpose(1, 2)
+        V = self.W_v(v).view(B, T_k, self.n_heads, self.head_dim).transpose(1, 2)
 
-        Q = torch.matmul(q_flat, self.w_query).view(shape_q)  # n_heads*batch_size*n_query*key_dim
-        K = torch.matmul(k_flat, self.w_key).view(shape_k)  # n_heads*batch_size*targets_size*key_dim
-        V = torch.matmul(v_flat, self.w_value).view(shape_v)  # n_heads*batch_size*targets_size*value_dim
+        scores = (Q @ K.transpose(-2, -1)) * self.norm_factor  # B, n_heads, T_q, T_k
 
-        U = self.norm_factor * torch.matmul(Q, K.transpose(2, 3))  # n_heads*batch_size*n_query*targets_size
+        if attn_mask is not None:  # attn_mask: B, T_q, T_k
+            attn_mask = attn_mask.unsqueeze(1).expand_as(scores)
+            scores = scores.masked_fill(attn_mask > 0, -6e4)
+        if key_padding_mask is not None:  # key_padding_mask: B, 1, T_k
+            key_padding_mask = key_padding_mask.unsqueeze(1).expand_as(scores)
+            scores = scores.masked_fill(key_padding_mask > 0, -6e4)
 
-        if attn_mask is not None:
-            attn_mask = attn_mask.view(1, n_batch, n_query, n_key).expand_as(U)
+        attn = torch.softmax(scores, dim=-1)
 
-        if key_padding_mask is not None:
-            key_padding_mask = key_padding_mask.repeat(1, n_query, 1)
-            key_padding_mask = key_padding_mask.view(1, n_batch, n_query, n_key).expand_as(U)  # copy for n_heads times
+        context = attn @ V  # B, n_heads, T_q, head_dim
+        context = context.transpose(1, 2).contiguous().view(B, T_q, self.embedding_dim)
+        out = self.W_o(context)
 
-        if attn_mask is not None and key_padding_mask is not None:
-            mask = (attn_mask + key_padding_mask)
-        elif attn_mask is not None:
-            mask = attn_mask
-        elif key_padding_mask is not None:
-            mask = key_padding_mask
-        else:
-            mask = None
-
-        if mask is not None:
-            U = U.masked_fill(mask > 0, -6e4)
-
-        attention = torch.softmax(U, dim=-1)  # n_heads*batch_size*n_query*targets_size
-
-        heads = torch.matmul(attention, V)  # n_heads*batch_size*n_query*value_dim
-
-        # out = heads.permute(1, 2, 0, 3).reshape(n_batch, n_query, n_dim)
-        out = torch.mm(
-            heads.permute(1, 2, 0, 3).reshape(-1, self.n_heads * self.value_dim),
-            # batch_size*n_query*n_heads*value_dim
-            self.w_out.view(-1, self.embedding_dim)
-            # n_heads*value_dim*embedding_dim
-        ).view(-1, n_query, self.embedding_dim)
-
-        return out, attention  # batch_size*n_query*embedding_dim
+        return out, attn  # out: B, T_q, embedding_dim, attn: B, n_heads, T_q, T_k
 
 
 class Normalization(nn.Module):
     def __init__(self, embedding_dim):
-        super(Normalization, self).__init__()
+        super().__init__()
         self.normalizer = nn.LayerNorm(embedding_dim)
 
-    def forward(self, input):
-        return self.normalizer(input.view(-1, input.size(-1))).view(*input.size())
+    def forward(self, x):
+        return self.normalizer(x)
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, embedding_dim, n_head):
+    def __init__(self, embedding_dim, n_head, ff_dim=512, dropout=0.0):
         super(EncoderLayer, self).__init__()
-        self.multiHeadAttention = MultiHeadAttention(embedding_dim, n_head)
-        self.normalization1 = Normalization(embedding_dim)
-        self.feedForward = nn.Sequential(nn.Linear(embedding_dim, 512), nn.ReLU(inplace=True),
-                                         nn.Linear(512, embedding_dim))
-        self.normalization2 = Normalization(embedding_dim)
+        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=False)
+        self.norm1 = Normalization(embedding_dim)
+        self.norm2 = Normalization(embedding_dim)
+        self.drop1 = nn.Dropout(dropout)
+        self.drop2 = nn.Dropout(dropout)
+        self.ffn = nn.Sequential(nn.Linear(embedding_dim, ff_dim),
+                                 nn.ReLU(inplace=True),
+                                 nn.Linear(ff_dim, embedding_dim))
 
     def forward(self, src, key_padding_mask=None, attn_mask=None):
-        h0 = src
-        h = self.normalization1(src)
-        h, _ = self.multiHeadAttention(q=h, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
-        h = h + h0
-        h1 = h
-        h = self.normalization2(h)
-        h = self.feedForward(h)
-        h2 = h + h1
+        h = self.norm1(src)
+        attn_out, _ = self.mha(q=h, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+        attn_out = self.drop1(attn_out)
+        h = src + attn_out
+
+        h2 = self.norm2(h)
+        ffn_out = self.ffn(h2)
+        ffn_out = self.drop2(ffn_out)
+        h2 = h + ffn_out
         return h2
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, embedding_dim, n_head):
+    def __init__(self, embedding_dim, n_head, ff_dim=512, dropout=0.0):
         super(DecoderLayer, self).__init__()
-        self.multiHeadAttention = MultiHeadAttention(embedding_dim, n_head)
-        self.normalization1 = Normalization(embedding_dim)
-        self.feedForward = nn.Sequential(nn.Linear(embedding_dim, 512),
-                                         nn.ReLU(inplace=True),
-                                         nn.Linear(512, embedding_dim))
-        self.normalization2 = Normalization(embedding_dim)
+        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=False)
+        self.norm1 = Normalization(embedding_dim)
+        self.norm2 = Normalization(embedding_dim)
+        self.drop1 = nn.Dropout(dropout)
+        self.drop2 = nn.Dropout(dropout)
+        self.ffn = nn.Sequential(nn.Linear(embedding_dim, ff_dim),
+                                 nn.ReLU(inplace=True),
+                                 nn.Linear(ff_dim, embedding_dim))
 
     def forward(self, tgt, memory, key_padding_mask=None, attn_mask=None):
         h0 = tgt
-        tgt = self.normalization1(tgt)
-        memory = self.normalization1(memory)
-        h, w = self.multiHeadAttention(q=tgt, k=memory, v=memory, key_padding_mask=key_padding_mask,
-                                       attn_mask=attn_mask)
-        h = h + h0
+        tgt = self.norm1(tgt)
+        attn_out, w = self.mha(q=tgt, k=memory, v=memory, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+        attn_out = self.drop1(attn_out)
+        h = h0 + attn_out
+
         h1 = h
-        h = self.normalization2(h)
-        h = self.feedForward(h)
-        h2 = h + h1
+        h = self.norm2(h)
+        ffn_out = self.ffn(h)
+        ffn_out = self.drop2(ffn_out)
+        h2 = ffn_out + h1
         return h2, w
 
 
 class Encoder(nn.Module):
     def __init__(self, embedding_dim=128, n_head=8, n_layer=1):
         super(Encoder, self).__init__()
-        self.layers = nn.ModuleList(EncoderLayer(embedding_dim, n_head) for i in range(n_layer))
+        self.layers = nn.ModuleList(EncoderLayer(embedding_dim, n_head) for _ in range(n_layer))
 
     def forward(self, src, key_padding_mask=None, attn_mask=None):
         for layer in self.layers:
@@ -196,7 +151,7 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, embedding_dim=128, n_head=8, n_layer=1):
         super(Decoder, self).__init__()
-        self.layers = nn.ModuleList([DecoderLayer(embedding_dim, n_head) for i in range(n_layer)])
+        self.layers = nn.ModuleList([DecoderLayer(embedding_dim, n_head) for _ in range(n_layer)])
 
     def forward(self, tgt, memory, key_padding_mask=None, attn_mask=None):
         for layer in self.layers:
