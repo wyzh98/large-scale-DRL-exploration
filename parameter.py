@@ -7,7 +7,7 @@ gifs_path = f'gifs/{FOLDER_NAME}'
 # save training data
 SUMMARY_WINDOW = 32  # how many training steps before writing data to tensorboard
 LOAD_MODEL = False  # do you want to load the model trained before
-SAVE_IMG_GAP = 100  # how many episodes before saving a gif
+SAVE_IMG_GAP = 1000  # how many episodes before saving a gif
 
 # map and planning resolution
 CELL_SIZE = 0.4  # meter, your map resolution

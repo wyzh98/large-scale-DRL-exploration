@@ -88,7 +88,7 @@ class Normalization(nn.Module):
 class EncoderLayer(nn.Module):
     def __init__(self, embedding_dim, n_head, ff_dim=512, dropout=0.0):
         super(EncoderLayer, self).__init__()
-        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=False)
+        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=True)
         self.norm1 = Normalization(embedding_dim)
         self.norm2 = Normalization(embedding_dim)
         self.drop1 = nn.Dropout(dropout)
@@ -113,7 +113,7 @@ class EncoderLayer(nn.Module):
 class DecoderLayer(nn.Module):
     def __init__(self, embedding_dim, n_head, ff_dim=512, dropout=0.0):
         super(DecoderLayer, self).__init__()
-        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=False)
+        self.mha = MultiHeadAttention(embedding_dim, n_head, bias=True)
         self.norm1 = Normalization(embedding_dim)
         self.norm2 = Normalization(embedding_dim)
         self.drop1 = nn.Dropout(dropout)
