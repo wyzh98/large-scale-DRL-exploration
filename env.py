@@ -9,9 +9,10 @@ from utils import *
 
 
 class Env:
-    def __init__(self, episode_index, plot=False):
+    def __init__(self, episode_index, plot=False, test=False):
         self.episode_index = episode_index
         self.plot = plot
+        self.test = test
         self.ground_truth, self.robot_cell = self.import_ground_truth(episode_index)
         self.ground_truth_size = np.shape(self.ground_truth)  # cell
         self.cell_size = CELL_SIZE  # meter
@@ -42,11 +43,10 @@ class Env:
             self.trajectory_y = [self.robot_location[1]]
 
     def import_ground_truth(self, episode_index):
-        map_dir = f'maps'
+        map_dir = 'maps_test' if self.test else 'maps_train'
         map_list = os.listdir(map_dir)
         map_index = episode_index % np.size(map_list)
-        ground_truth = (io.imread(map_dir + '/' + map_list[map_index], 1) * 255).astype(int)
-
+        ground_truth = (io.imread(map_dir + '/' + map_list[map_index], 1)).astype(int)  # 127: obstacle, 195: free, 208: start
         ground_truth = block_reduce(ground_truth, 2, np.min)
 
         robot_cell = np.nonzero(ground_truth == 208)
