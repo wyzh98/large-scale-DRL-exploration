@@ -60,14 +60,25 @@ class MultiHeadAttention(nn.Module):
 
         scores = (Q @ K.transpose(-2, -1)) * self.norm_factor  # B, n_heads, T_q, T_k
 
+        mask = None
         if attn_mask is not None:  # attn_mask: B, T_q, T_k
-            attn_mask = attn_mask.unsqueeze(1).expand_as(scores)
-            scores = scores.masked_fill(attn_mask > 0, -6e4)
+            attn_mask_expanded = attn_mask.unsqueeze(1).expand_as(scores)
+            mask = attn_mask_expanded if mask is None else (mask + attn_mask_expanded)
+
         if key_padding_mask is not None:  # key_padding_mask: B, 1, T_k
-            key_padding_mask = key_padding_mask.unsqueeze(1).expand_as(scores)
-            scores = scores.masked_fill(key_padding_mask > 0, -6e4)
+            kpm_expanded = key_padding_mask.unsqueeze(1).expand_as(scores)
+            mask = kpm_expanded if mask is None else (mask + kpm_expanded)
+
+        if mask is not None:
+            scores = scores.masked_fill(mask > 0, -1e8)
 
         attn = torch.softmax(scores, dim=-1)
+
+        if mask is not None:
+            all_masked = (mask > 0).all(dim=-1, keepdim=True)  # B, n_heads, T_q, 1
+            if all_masked.any():
+                all_masked = all_masked.expand_as(attn)        # B, n_heads, T_q, T_k
+                attn = torch.where(all_masked, torch.zeros_like(attn), attn)
 
         context = attn @ V  # B, n_heads, T_q, head_dim
         context = context.transpose(1, 2).contiguous().view(B, T_q, self.embedding_dim)
@@ -167,6 +178,9 @@ class PolicyNet(nn.Module):
         self.initial_embedding = nn.Linear(node_dim, embedding_dim)
         self.encoder = Encoder(embedding_dim=embedding_dim, n_head=8, n_layer=6)
 
+        self.frontier_embedding = nn.Linear(2, embedding_dim)
+        self.cross_attn = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
+
         # decoder
         self.decoder = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
         self.current_embedding = nn.Linear(embedding_dim * 2, embedding_dim)
@@ -174,9 +188,15 @@ class PolicyNet(nn.Module):
         # pointer
         self.pointer = SingleHeadAttention(embedding_dim)
 
-    def encode_graph(self, node_inputs, node_padding_mask, edge_mask):
+    def encode_graph(self, node_inputs, node_padding_mask, edge_mask,
+                     frontier_inputs, frontier_padding_mask, node_frontier_mask):
         node_feature = self.initial_embedding(node_inputs)
-        enhanced_node_feature = self.encoder(src=node_feature,
+        frontier_feature = self.frontier_embedding(frontier_inputs)
+        enhanced_node_feature, _ = self.cross_attn(node_feature,
+                                                   frontier_feature,
+                                                   key_padding_mask=frontier_padding_mask,
+                                                   attn_mask=node_frontier_mask)
+        enhanced_node_feature = self.encoder(src=enhanced_node_feature,
                                                          key_padding_mask=node_padding_mask,
                                                          attn_mask=edge_mask)
 
@@ -207,9 +227,10 @@ class PolicyNet(nn.Module):
         return logp
 
     # @torch.compile
-    def forward(self, node_inputs, node_padding_mask, edge_mask, current_index,
-                current_edge, edge_padding_mask):
-        enhanced_node_feature = self.encode_graph(node_inputs, node_padding_mask, edge_mask)
+    def forward(self, node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask,
+                frontier_inputs, frontier_padding_mask, node_frontier_mask):
+        enhanced_node_feature = self.encode_graph(node_inputs, node_padding_mask, edge_mask,
+                                                  frontier_inputs, frontier_padding_mask, node_frontier_mask)
         current_node_feature, enhanced_current_node_feature = self.decode_state(
             enhanced_node_feature, current_index, node_padding_mask)
         logp = self.output_policy(current_node_feature, enhanced_current_node_feature,
@@ -226,14 +247,23 @@ class QNet(nn.Module):
         self.initial_embedding = nn.Linear(node_dim, embedding_dim)
         self.encoder = Encoder(embedding_dim=embedding_dim, n_head=8, n_layer=6)
 
+        self.frontier_embedding = nn.Linear(2, embedding_dim)
+        self.cross_attn = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
+
         # decoder
         self.decoder = Decoder(embedding_dim=embedding_dim, n_head=8, n_layer=1)
 
         self.q_values_layer = nn.Linear(embedding_dim * 3, 1)
 
-    def encode_graph(self, node_inputs, node_padding_mask, edge_mask):
+    def encode_graph(self, node_inputs, node_padding_mask, edge_mask,
+                     frontier_inputs, frontier_padding_mask, node_frontier_mask):
         node_feature = self.initial_embedding(node_inputs)
-        enhanced_node_feature = self.encoder(src=node_feature,
+        frontier_feature = self.frontier_embedding(frontier_inputs)
+        enhanced_node_feature, _ = self.cross_attn(node_feature,
+                                                   frontier_feature,
+                                                   key_padding_mask=frontier_padding_mask,
+                                                   attn_mask=node_frontier_mask)
+        enhanced_node_feature = self.encoder(src=enhanced_node_feature,
                                                          key_padding_mask=node_padding_mask,
                                                          attn_mask=edge_mask)
 
@@ -263,8 +293,9 @@ class QNet(nn.Module):
         return q_values
 
     def forward(self, node_inputs, node_padding_mask, edge_mask, current_index,
-                current_edge, edge_padding_mask):
-        enhanced_node_feature = self.encode_graph(node_inputs, node_padding_mask, edge_mask)
+                current_edge, edge_padding_mask, frontier_inputs, frontier_padding_mask, node_frontier_mask):
+        enhanced_node_feature = self.encode_graph(node_inputs, node_padding_mask, edge_mask,
+                                                  frontier_inputs, frontier_padding_mask, node_frontier_mask)
         current_node_feature, enhanced_current_node_feature = self.decode_state(enhanced_node_feature, current_index, node_padding_mask)
         q_values = self.output_q(current_node_feature, enhanced_current_node_feature,
                                  enhanced_node_feature, current_edge, edge_padding_mask)

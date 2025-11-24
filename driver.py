@@ -114,7 +114,7 @@ def main():
 
     # initialize training replay buffer
     experience_buffer = []
-    for i in range(27):
+    for i in range(33):
         experience_buffer.append([])
 
     # collect data from worker and do training
@@ -169,38 +169,50 @@ def main():
                     action = torch.stack(rollouts[6]).to(device)
                     reward = torch.stack(rollouts[7]).to(device)
                     done = torch.stack(rollouts[8]).to(device)
-                    next_node_inputs = torch.stack(rollouts[9]).to(device)
-                    next_node_padding_mask = torch.stack(rollouts[10]).to(device)
-                    next_edge_mask = torch.stack(rollouts[11]).to(device)
-                    next_current_index = torch.stack(rollouts[12]).to(device)
-                    next_current_edge = torch.stack(rollouts[13]).to(device)
-                    next_edge_padding_mask = torch.stack(rollouts[14]).to(device)
 
-                    critic_node_inputs = torch.stack(rollouts[15]).to(device)
-                    critic_node_padding_mask = torch.stack(rollouts[16]).to(device)
-                    critic_edge_mask = torch.stack(rollouts[17]).to(device)
-                    critic_current_index = torch.stack(rollouts[18]).to(device)
-                    critic_current_edge = torch.stack(rollouts[19]).to(device)
-                    critic_edge_padding_mask = torch.stack(rollouts[20]).to(device)
-                    critic_next_node_inputs = torch.stack(rollouts[21]).to(device)
-                    critic_next_node_padding_mask = torch.stack(rollouts[22]).to(device)
-                    critic_next_edge_mask = torch.stack(rollouts[23]).to(device)
-                    critic_next_current_index = torch.stack(rollouts[24]).to(device)
-                    critic_next_current_edge = torch.stack(rollouts[25]).to(device)
-                    critic_next_edge_padding_mask = torch.stack(rollouts[26]).to(device)
+                    frontier_inputs = torch.stack(rollouts[9]).to(device)
+                    frontier_padding_mask = torch.stack(rollouts[10]).to(device)
+                    node_frontier_mask = torch.stack(rollouts[11]).to(device)
+
+                    next_node_inputs = torch.stack(rollouts[12]).to(device)
+                    next_node_padding_mask = torch.stack(rollouts[13]).to(device)
+                    next_edge_mask = torch.stack(rollouts[14]).to(device)
+                    next_current_index = torch.stack(rollouts[15]).to(device)
+                    next_current_edge = torch.stack(rollouts[16]).to(device)
+                    next_edge_padding_mask = torch.stack(rollouts[17]).to(device)
+
+                    next_frontier_inputs = torch.stack(rollouts[18]).to(device)
+                    next_frontier_padding_mask = torch.stack(rollouts[19]).to(device)
+                    next_node_frontier_mask = torch.stack(rollouts[20]).to(device)
+
+                    critic_node_inputs = torch.stack(rollouts[21]).to(device)
+                    critic_node_padding_mask = torch.stack(rollouts[22]).to(device)
+                    critic_edge_mask = torch.stack(rollouts[23]).to(device)
+                    critic_current_index = torch.stack(rollouts[24]).to(device)
+                    critic_current_edge = torch.stack(rollouts[25]).to(device)
+                    critic_edge_padding_mask = torch.stack(rollouts[26]).to(device)
+                    critic_next_node_inputs = torch.stack(rollouts[27]).to(device)
+                    critic_next_node_padding_mask = torch.stack(rollouts[28]).to(device)
+                    critic_next_edge_mask = torch.stack(rollouts[29]).to(device)
+                    critic_next_current_index = torch.stack(rollouts[30]).to(device)
+                    critic_next_current_edge = torch.stack(rollouts[31]).to(device)
+                    critic_next_edge_padding_mask = torch.stack(rollouts[32]).to(device)
 
                     observation = [node_inputs, node_padding_mask, edge_mask, current_index,
-                                   current_edge, edge_padding_mask]
+                                   current_edge, edge_padding_mask,
+                                   frontier_inputs, frontier_padding_mask, node_frontier_mask]
                     next_observation = [next_node_inputs, next_node_padding_mask, next_edge_mask,
-                                        next_current_index, next_current_edge, next_edge_padding_mask]
+                                        next_current_index, next_current_edge, next_edge_padding_mask,
+                                        next_frontier_inputs, next_frontier_padding_mask, next_node_frontier_mask]
 
                     critic_observation = [critic_node_inputs, critic_node_padding_mask, critic_edge_mask,
-                                          critic_current_index,
-                                          critic_current_edge, critic_edge_padding_mask]
+                                          critic_current_index, critic_current_edge, critic_edge_padding_mask,
+                                          frontier_inputs, frontier_padding_mask, node_frontier_mask]
                     critic_next_observation = [critic_next_node_inputs, critic_next_node_padding_mask,
                                                critic_next_edge_mask,
                                                critic_next_current_index, critic_next_current_edge,
-                                               critic_next_edge_padding_mask]
+                                               critic_next_edge_padding_mask,
+                                               next_frontier_inputs, next_frontier_padding_mask, next_node_frontier_mask]
 
                     # SAC
                     with torch.no_grad():

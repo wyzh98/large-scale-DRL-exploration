@@ -46,7 +46,7 @@ class Env:
         map_dir = 'maps_test' if self.test else 'maps_train'
         map_list = os.listdir(map_dir)
         map_index = episode_index % np.size(map_list)
-        ground_truth = (io.imread(map_dir + '/' + map_list[map_index], 1)).astype(int)  # 127: obstacle, 195: free, 208: start
+        ground_truth = (io.imread(map_dir + '/' + map_list[map_index], 1)).astype(int)
         ground_truth = block_reduce(ground_truth, 2, np.min)
 
         robot_cell = np.nonzero(ground_truth == 208)

@@ -80,7 +80,6 @@ class GroundTruthNodeManager:
         self.explored_sign = explored_sign
 
         node_coords = all_node_coords
-        node_utility = utility.reshape(-1, 1)
         node_guidepost = explored_sign.reshape(-1, 1)
         node_guidepost2 = guidepost.reshape(-1, 1)
         current_index = current_index
@@ -92,9 +91,7 @@ class GroundTruthNodeManager:
         node_coords = np.concatenate((node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
                                       node_coords[:, 1].reshape(-1, 1) - current_node_coords[1]),
                                       axis=-1) / UPDATING_MAP_SIZE / 2
-        #node_coords = node_coords / UPDATING_MAP_SIZE / 3
-        node_utility = node_utility / (SENSOR_RANGE * 3.14 // FRONTIER_CELL_SIZE)
-        node_inputs = np.concatenate((node_coords, node_utility, node_guidepost, node_guidepost2), axis=1)
+        node_inputs = np.concatenate((node_coords, node_guidepost, node_guidepost2), axis=1)
         node_inputs = torch.FloatTensor(node_inputs).unsqueeze(0).to(self.device)
 
         assert node_coords.shape[0] < NODE_PADDING_SIZE, print(node_coords.shape[0], NODE_PADDING_SIZE)

@@ -25,12 +25,12 @@ class Worker:
 
         self.episode_buffer = []
         self.perf_metrics = dict()
-        for i in range(27):
+        for i in range(33):
             self.episode_buffer.append([])
 
     def run_episode(self):
         done = False
-        self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
+        self.robot.update_planning_state(self.env.belief_info, self.env.robot_location, self.env.global_frontiers)
         observation = self.robot.get_observation()
         ground_truth_observation = self.ground_truth_node_manager.get_ground_truth_observation(self.env.robot_location)
 
@@ -52,7 +52,7 @@ class Worker:
 
             reward = self.env.step(next_location)
 
-            self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
+            self.robot.update_planning_state(self.env.belief_info, self.env.robot_location, self.env.global_frontiers)
             if self.robot.utility.sum() == 0:
                 done = True
                 reward += 20
@@ -81,7 +81,8 @@ class Worker:
             make_gif(gifs_path, self.global_step, self.env.frame_files, self.env.explored_rate)
 
     def save_observation(self, observation, ground_truth_observation):
-        node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask = observation
+        (node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask,
+         frontier_inputs, frontier_padding_mask, node_frontier_mask) = observation
         self.episode_buffer[0] += node_inputs
         self.episode_buffer[1] += node_padding_mask.bool()
         self.episode_buffer[2] += edge_mask.bool()
@@ -89,13 +90,17 @@ class Worker:
         self.episode_buffer[4] += current_edge
         self.episode_buffer[5] += edge_padding_mask.bool()
 
+        self.episode_buffer[9] += frontier_inputs
+        self.episode_buffer[10] += frontier_padding_mask.bool()
+        self.episode_buffer[11] += node_frontier_mask.bool()
+
         critic_node_inputs, critic_node_padding_mask, critic_edge_mask, critic_current_index, critic_current_edge, critic_edge_padding_mask = ground_truth_observation
-        self.episode_buffer[15] += critic_node_inputs
-        self.episode_buffer[16] += critic_node_padding_mask.bool()
-        self.episode_buffer[17] += critic_edge_mask.bool()
-        self.episode_buffer[18] += critic_current_index
-        self.episode_buffer[19] += critic_current_edge
-        self.episode_buffer[20] += critic_edge_padding_mask.bool()
+        self.episode_buffer[21] += critic_node_inputs
+        self.episode_buffer[22] += critic_node_padding_mask.bool()
+        self.episode_buffer[23] += critic_edge_mask.bool()
+        self.episode_buffer[24] += critic_current_index
+        self.episode_buffer[25] += critic_current_edge
+        self.episode_buffer[26] += critic_edge_padding_mask.bool()
 
         assert torch.all(current_edge == critic_current_edge), print(current_edge, critic_current_edge, current_index, critic_current_index)
         assert torch.all(node_inputs[0, current_index.item(), :2] == critic_node_inputs[0, critic_current_index.item(), :2]), print(node_inputs[0, current_index.item()], critic_node_inputs[0, critic_current_index.item()])
@@ -109,27 +114,32 @@ class Worker:
         self.episode_buffer[8] += torch.tensor([int(done)]).reshape(1, 1, 1).to(self.device)
 
     def save_next_observations(self, observation, ground_truth_observation):
-        node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask = observation
-        self.episode_buffer[9] += node_inputs
-        self.episode_buffer[10] += node_padding_mask.bool()
-        self.episode_buffer[11] += edge_mask.bool()
-        self.episode_buffer[12] += current_index
-        self.episode_buffer[13] += current_edge
-        self.episode_buffer[14] += edge_padding_mask.bool()
+        (node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask,
+         frontier_inputs, frontier_padding_mask, node_frontier_mask) = observation
+        self.episode_buffer[12] += node_inputs
+        self.episode_buffer[13] += node_padding_mask.bool()
+        self.episode_buffer[14] += edge_mask.bool()
+        self.episode_buffer[15] += current_index
+        self.episode_buffer[16] += current_edge
+        self.episode_buffer[17] += edge_padding_mask.bool()
+
+        self.episode_buffer[18] += frontier_inputs
+        self.episode_buffer[19] += frontier_padding_mask.bool()
+        self.episode_buffer[20] += node_frontier_mask.bool()
 
         critic_node_inputs, critic_node_padding_mask, critic_edge_mask, critic_current_index, critic_current_edge, critic_edge_padding_mask = ground_truth_observation
-        self.episode_buffer[21] += critic_node_inputs
-        self.episode_buffer[22] += critic_node_padding_mask.bool()
-        self.episode_buffer[23] += critic_edge_mask.bool()
-        self.episode_buffer[24] += critic_current_index
-        self.episode_buffer[25] += critic_current_edge
-        self.episode_buffer[26] += critic_edge_padding_mask.bool()
+        self.episode_buffer[27] += critic_node_inputs
+        self.episode_buffer[28] += critic_node_padding_mask.bool()
+        self.episode_buffer[29] += critic_edge_mask.bool()
+        self.episode_buffer[30] += critic_current_index
+        self.episode_buffer[31] += critic_current_edge
+        self.episode_buffer[32] += critic_edge_padding_mask.bool()
 
 if __name__ == "__main__":
     torch.manual_seed(4777)
     np.random.seed(4777)
     model = PolicyNet(NODE_INPUT_DIM, EMBEDDING_DIM)
-    # checkpoint = torch.load(model_path + '/checkpoint.pth', map_location='cpu')
-    # model.load_state_dict(checkpoint['policy_model'])
+    checkpoint = torch.load(model_path + '/checkpoint.pth', map_location='cpu')
+    model.load_state_dict(checkpoint['policy_model'])
     worker = Worker(0, model, 77, save_image=False)
     worker.run_episode()

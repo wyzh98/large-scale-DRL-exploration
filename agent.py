@@ -38,6 +38,7 @@ class Agent:
         # graph
         self.node_coords, self.utility, self.guidepost = None, None, None
         self.current_index, self.adjacent_matrix, self.neighbor_indices = None, None, None
+        self.frontier_coords, self.node_frontier_adjacency = None, None
 
     def update_map(self, map_info):
         # no need in training because of shallow copy
@@ -105,7 +106,7 @@ class Agent:
 
         return updating_map_info
 
-    def update_planning_state(self, map_info, location):
+    def update_planning_state(self, map_info, location, global_frontiers):
         self.update_map(map_info)
         self.update_location(location)
         self.update_updating_map(self.location)
@@ -114,15 +115,16 @@ class Agent:
                                        self.frontier,
                                        self.updating_map_info,
                                        self.map_info)
-        self.node_coords, self.utility, self.guidepost, self.adjacent_matrix, self.current_index, self.neighbor_indices = \
-            self.update_observation()
+        self.node_coords, self.utility, self.guidepost, self.adjacent_matrix, self.current_index, self.neighbor_indices, \
+            self.frontier_coords, self.node_frontier_adjacency = self.update_observation(global_frontiers)
 
-    def update_observation(self):
+    def update_observation(self, global_frontiers):
         all_node_coords = []
         for node in self.node_manager.nodes_dict.__iter__():
             all_node_coords.append(node.data.coords)
         all_node_coords = np.array(all_node_coords).reshape(-1, 2)
         utility = []
+        guidepost = []
 
         n_nodes = all_node_coords.shape[0]
         adjacent_matrix = np.ones((n_nodes, n_nodes)).astype(int)
@@ -130,51 +132,59 @@ class Agent:
         for i, coords in enumerate(all_node_coords):
             node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
             utility.append(node.utility)
+            guidepost.append(node.visited)
             for neighbor in node.neighbor_set:
                 index = np.argwhere(node_coords_to_check == neighbor[0] + neighbor[1] * 1j)
                 assert index is not None
                 index = index[0][0]
                 adjacent_matrix[i, index] = 0
-        utility = np.array(utility)
 
-        indices = np.argwhere(utility > 0).reshape(-1)
-        utility_node_coords = all_node_coords[indices]
-        dist_dict, prev_dict = Dijkstra(self.node_manager.nodes_dict, self.location)
-        guidepost = np.zeros_like(utility)
-        nearest_utility_coords = self.location
-        nearest_dist = 1e8
-        for end in utility_node_coords:
-            if end[0] != self.location[0] or end[1] != self.location[1]:
-                dist = dist_dict[(end[0], end[1])]
-                if dist < nearest_dist:
-                    nearest_dist = dist
-                    nearest_utility_coords = end
-        path_coords, _ = get_Dijkstra_path_and_dist(dist_dict, prev_dict, nearest_utility_coords)
-        for coords in path_coords:
-            coords_index = np.argwhere(node_coords_to_check == coords[0] + coords[1] * 1j)
-            if coords_index:
-                index = coords_index[0]
-                guidepost[index] = 1
+        utility = np.array(utility)
+        guidepost = np.array(guidepost)
 
         current_index = np.argwhere(node_coords_to_check == self.location[0] + self.location[1] * 1j)[0][0]
         neighbor_indices = np.argwhere(adjacent_matrix[current_index] == 0).reshape(-1)
-        return all_node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices
+
+        if global_frontiers:
+            n_frontiers = len(global_frontiers)
+            all_frontier_coords = np.array(list(global_frontiers)).reshape(-1, 2)
+            frontier_sorted_idx = np.lexsort((all_frontier_coords[:, 1], all_frontier_coords[:, 0]))
+            all_frontier_coords = all_frontier_coords[frontier_sorted_idx]
+            frontier_index = {(float(x), float(y)): j for j, (x, y) in enumerate(all_frontier_coords)}
+            node_frontier_adjacency = np.ones((n_nodes, n_frontiers)).astype(int)
+            for i, coords in enumerate(all_node_coords):
+                node = self.node_manager.nodes_dict.find((coords[0], coords[1])).data
+                if node.utility == 0:
+                    continue
+                for fx, fy in node.observable_frontiers:
+                    key = (float(fx), float(fy))
+                    j = frontier_index.get(key, None)
+                    if j is not None:
+                        node_frontier_adjacency[i, j] = 0
+        else:
+            all_frontier_coords = np.zeros((0, 2))
+            node_frontier_adjacency = np.ones((n_nodes, 0)).astype(int)
+
+        return all_node_coords, utility, guidepost, adjacent_matrix, current_index, neighbor_indices, \
+            all_frontier_coords, node_frontier_adjacency
 
     def get_observation(self):
         node_coords = self.node_coords
-        node_utility = self.utility.reshape(-1, 1)
         node_guidepost = self.guidepost.reshape(-1, 1)
         current_index = self.current_index
         edge_mask = self.adjacent_matrix
         current_edge = self.neighbor_indices
         n_node = node_coords.shape[0]
 
+        frontier_coords = self.frontier_coords
+        node_frontier_mask = self.node_frontier_adjacency
+        n_frontier = frontier_coords.shape[0]
+
         current_node_coords = node_coords[self.current_index]
         node_coords = np.concatenate((node_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
                                       node_coords[:, 1].reshape(-1, 1) - current_node_coords[1]),
                                       axis=-1) / UPDATING_MAP_SIZE / 2
-        node_utility = node_utility / (SENSOR_RANGE * 3.14 // FRONTIER_CELL_SIZE)
-        node_inputs = np.concatenate((node_coords, node_utility, node_guidepost), axis=1)
+        node_inputs = np.concatenate((node_coords, node_guidepost), axis=1)
         node_inputs = torch.FloatTensor(node_inputs).unsqueeze(0).to(self.device)
 
         assert node_coords.shape[0] < NODE_PADDING_SIZE, print(node_coords.shape[0], NODE_PADDING_SIZE)
@@ -206,10 +216,34 @@ class Agent:
         padding = torch.nn.ConstantPad1d((0, K_SIZE - k_size), 1)
         edge_padding_mask = padding(edge_padding_mask)
 
-        return [node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask]
+        if n_frontier:
+            frontier_coords = np.concatenate((frontier_coords[:, 0].reshape(-1, 1) - current_node_coords[0],
+                                              frontier_coords[:, 1].reshape(-1, 1) - current_node_coords[1]),
+                                             axis=-1) / UPDATING_MAP_SIZE / 2
+            frontier_inputs = torch.FloatTensor(frontier_coords).unsqueeze(0).to(self.device)
+
+            assert n_frontier < FRONTIER_PADDING_SIZE, print(n_frontier, FRONTIER_PADDING_SIZE)
+            padding = torch.nn.ZeroPad2d((0, 0, 0, FRONTIER_PADDING_SIZE - n_frontier))
+            frontier_inputs = padding(frontier_inputs)
+
+            frontier_padding_mask = torch.zeros((1, 1, n_frontier), dtype=torch.int16).to(self.device)
+            frontier_padding = torch.ones((1, 1, FRONTIER_PADDING_SIZE - n_frontier), dtype=torch.int16).to(self.device)
+            frontier_padding_mask = torch.cat((frontier_padding_mask, frontier_padding), dim=-1)
+
+            node_frontier_mask = torch.tensor(node_frontier_mask).unsqueeze(0).to(self.device)
+            padding = torch.nn.ConstantPad2d((0, FRONTIER_PADDING_SIZE - n_frontier, 0, NODE_PADDING_SIZE - n_node), 1)
+            node_frontier_mask = padding(node_frontier_mask)
+        else:
+            frontier_inputs = torch.zeros((1, FRONTIER_PADDING_SIZE, 2), dtype=torch.float32).to(self.device)
+            frontier_padding_mask = torch.ones((1, 1, FRONTIER_PADDING_SIZE), dtype=torch.int16).to(self.device)
+            node_frontier_mask = torch.ones((1, NODE_PADDING_SIZE, FRONTIER_PADDING_SIZE), dtype=torch.int16).to(
+                self.device)
+
+        return [node_inputs, node_padding_mask, edge_mask, current_index, current_edge, edge_padding_mask,
+                frontier_inputs, frontier_padding_mask, node_frontier_mask]
 
     def select_next_waypoint(self, observation):
-        _, _, _, _, current_edge, _ = observation
+        _, _, _, _, current_edge, _, _, _, _ = observation
         with torch.no_grad():
             logp = self.policy_net(*observation)
 

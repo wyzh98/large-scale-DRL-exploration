@@ -1,5 +1,5 @@
 # saving path
-FOLDER_NAME = 'ariadne1_mid'
+FOLDER_NAME = 'ariadne1_mid_skipattn'
 model_path = f'model/{FOLDER_NAME}'
 train_path = f'train/{FOLDER_NAME}'
 gifs_path = f'gifs/{FOLDER_NAME}'
@@ -37,12 +37,13 @@ GAMMA = 1
 NUM_META_AGENT = 16  # how many threads does your CPU have
 
 # network parameters
-NODE_INPUT_DIM = 4
+NODE_INPUT_DIM = 3
 EMBEDDING_DIM = 128
 
 # Graph parameters
 K_SIZE = 25  # the number of neighboring nodes, fixed
 NODE_PADDING_SIZE = 360  # the number of nodes will be padded to this value, need it for batch training
+FRONTIER_PADDING_SIZE = 240
 
 # GPU usage
 USE_GPU = False  # do you want to collect training data using GPUs (better not)

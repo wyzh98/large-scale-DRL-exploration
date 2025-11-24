@@ -87,7 +87,7 @@ class TestWorker:
     def run_episode(self):
         done = False
 
-        self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
+        self.robot.update_planning_state(self.env.belief_info, self.env.robot_location, self.env.global_frontiers)
         observation = self.robot.get_observation()
 
         if self.save_image:
@@ -97,7 +97,7 @@ class TestWorker:
         for step in range(MAX_EPISODE_STEP):
             next_location, action_index = self.robot.select_next_waypoint(observation)
             self.env.step(next_location)
-            self.robot.update_planning_state(self.env.belief_info, self.env.robot_location)
+            self.robot.update_planning_state(self.env.belief_info, self.env.robot_location, self.env.global_frontiers)
             if self.robot.utility.sum() == 0 or self.env.explored_rate > 0.9999:
                 done = True
             observation = self.robot.get_observation()
