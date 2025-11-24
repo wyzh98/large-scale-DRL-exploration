@@ -26,7 +26,7 @@ class SingleHeadAttention(nn.Module):
         scores = self.tanh_clipping * scores.tanh()
 
         if mask is not None:
-            scores = scores.masked_fill(mask == 1, -6e4)
+            scores = scores.masked_fill(mask == 1, -1e8)
 
         attn = torch.log_softmax(scores, dim=-1)  # B, T_q, T_k
 
